@@ -1,14 +1,13 @@
 const path = require("path");
 const fetch = require("node-fetch");
-const http = require("http");
-const https = require("https");
 const fs = require('fs').promises;
 const { existsSync } = require("fs");
+const CACHE_PATH = path.join(__dirname, "assets");
+const http = require("http");
+const https = require("https");
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 const agent = (_parsedURL) => _parsedURL.protocol == "http:" ? httpAgent : httpsAgent;
-const CACHE_PATH = path.join(__dirname, "assets");
-const BASE_URL = "https://discord.com";
 
 const INDEX_SCRIPTS = [
 "ee7c382d9257652a88c8f7b7f22a994d.png",
@@ -34,16 +33,58 @@ const print = (x, printover = true) => {
 
 const processFile = async (asset) => {
 	asset = `${asset}${asset.includes(".") ? "" : ".js"}`;
-	const url = `${BASE_URL}/assets/${asset}`;
-	const res = await fetch(url, { agent });
-	if (res.status !== 200) {
-		print(`${res.status} on ${asset}`, false);
-		return [];
+	var res = await fetch(("https://discord.com/assets/"+asset), { agent });
+	if (res && res.status && res.status == 200) {
+		if (asset.includes(".") && !asset.includes(".js") && !asset.includes(".css")) {
+			await fs.writeFile(path.join(CACHE_PATH, asset), await res.buffer());
+			var text = null;
+		} else {
+			var text = await res.text();
+		}
+	} else if (res && res.status && res.status !== 200) {
+		print(`${res.status} on https://discord.com/assets/${asset}`, false);
+		var res = await fetch(("https://web.archive.org/web/0id_/https://discord.com/assets/"+asset), { agent });
+		if (res && res.status && res.status == 200) {
+			if (asset.includes(".") && !asset.includes(".js") && !asset.includes(".css")) {
+				await fs.writeFile(path.join(CACHE_PATH, asset), await res.buffer());
+				var text = null;
+			} else {
+				var text = await res.text();
+			}
+		} else if (res && res.status && res.status !== 200) {
+			print(`${res.status} on https://web.archive.org/web/0id_/https://discord.com/assets/${asset}`, false);
+			var res = await fetch(("https://web.archive.org/web/0id_/https://discordapp.com/assets/"+asset), { agent });
+			if (res && res.status && res.status == 200) {
+				if (asset.includes(".") && !asset.includes(".js") && !asset.includes(".css")) {
+					await fs.writeFile(path.join(CACHE_PATH, asset), await res.buffer());
+					var text = null;
+				} else {
+					var text = await res.text();
+				}
+			} else if (res && res.status && res.status !== 200) {
+				print(`${res.status} on https://web.archive.org/web/0id_/https://discordapp.com/assets/${asset}`, false);
+				var text = null;
+			} else {
+				processFile(asset);
+				var text = null;
+			}
+		} else {
+			processFile(asset);
+			var text = null;
+		}
+	} else {
+		processFile(asset);
+		var text = null;
 	}
-	let text = await res.text();
+	if (text == null) {
+		return []
+	}
 	await fs.writeFile(path.join(CACHE_PATH, asset), text);
-	let ret = new Set([
+	var ret = new Set([
 		...(text.match(/"[A-Fa-f0-9]{20}"/g) || []),
+		...[...text.matchAll(/Worker\(.\..\+"(.*?\.worker\.js)"/g)].map((x) => x[1],),
+		...[...text.matchAll(/\.exports=.\..\+"(.*?\.worker\.js)"/g)].map((x) => x[1],),
+		...[...text.matchAll(/\/assets\/([a-zA-Z0-9]*?\.worker\.js)/g)].map((x) => x[1],),
 		...[...text.matchAll(/\.exports=.\..\+"(.*?\..{0,5})"/g)].map((x) => x[1],),
 		...[...text.matchAll(/\/assets\/([a-zA-Z0-9]*?\.[a-z0-9]{0,5})/g)].map((x) => x[1],),
 	]);
@@ -51,19 +92,21 @@ const processFile = async (asset) => {
 
 };
 
+
 (async () => {
 	if (!existsSync(CACHE_PATH)) {
 		await fs.mkdir(CACHE_PATH, { recursive: true });
 	}
 	const assets = new Set(INDEX_SCRIPTS);
-	let promises = [];
-	let index = 0;
-	for (let asset of assets) {
+	var promises = [];
+	var index = 0;
+	for (var asset of assets) {
 		index += 1;
-		print(`Scraping asset ${asset}. Remaining: ${assets.size - index}`);
+		print(`Scraping Asset: ${asset} - Assets Remaining: ${assets.size - index}`);
 		promises.push(processFile(asset));
 		const values = await Promise.all(promises);
 		promises = [];
 		values.flat().forEach((x) => assets.add(x));
 	}
+	print("Done Scraping Assets!", false);
 })();
